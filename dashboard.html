@@ -18,6 +18,28 @@
   #beta-banner{position:absolute; top:10px; left:10px; padding:6px 10px; background:#ff0; color:#111; font-weight:bold; animation:flash 1s infinite; z-index:1000;}
   @keyframes flash{0%,50%,100%{opacity:1}25%,75%{opacity:0}}
   .small { font-size:13px; color:#ccc; margin-left:8px; }
+
+
+.live-warning {
+  background: linear-gradient(90deg, #ff0000, #ff7300, #ff0000);
+  color: #fff;
+  font-weight: bold;
+  text-align: center;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 10px auto;
+  max-width: 800px;
+  font-size: 15px;
+  animation: glow 1.2s ease-in-out infinite;
+}
+.hidden { display: none; }
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 8px #ff0000; }
+  50% { box-shadow: 0 0 20px #ff7300; }
+}
+
+
 </style>
 </head>
 <body>
@@ -57,6 +79,13 @@
 <div style="max-width:1100px; margin:12px auto; display:flex; gap:12px; align-items:center;">
   <div id="signals" class="gray">Signals: Idle</div>
   <div id="status" class="gray">status: idle</div>
+
+<div id="live-warning" class="live-warning hidden">
+  🚨 LIVE TRADING ACTIVE — ORDERS WILL BE SENT TO BYBIT 🚨
+</div>
+
+
+
   <div style="margin-left:auto; display:flex; gap:8px;">
     <div id="global-pnl" style="padding:8px 12px; background:linear-gradient(135deg,#ff512f,#dd2476); border-radius:6px;">Global PnL: $0.00</div>
     <div id="withdrawable-pnl" style="padding:8px 12px; background:linear-gradient(135deg,#36d1dc,#5b86e5); border-radius:6px;">Withdrawable PnL: $0.00</div>
@@ -337,6 +366,24 @@ $('pairSelect').onchange = () => { updateChartForSelected(); populateTable(); };
 // initial draw
 updateChartForSelected();
 populateTable();
+
+
+function updateLiveWarning() {
+  const mode = document.getElementById("modeSelect").value;
+  const banner = document.getElementById("live-warning");
+  if (mode === "live") {
+    banner.classList.remove("hidden");
+  } else {
+    banner.classList.add("hidden");
+  }
+}
+
+// Update when Mode changes
+document.getElementById("modeSelect").addEventListener("change", updateLiveWarning);
+
+// Run once on load
+updateLiveWarning();
+
 
 </script>
 </body>
