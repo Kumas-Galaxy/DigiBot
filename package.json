@@ -1,22 +1,46 @@
 {
   "name": "digibot",
   "version": "1.0.0",
-  "main": "server.js",
   "type": "module",
+  "main": "telegram.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node telegram.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "body-parser": "^2.2.0",
     "axios": "^1.12.2",
+    "body-parser": "^2.2.0",
+    "bybit-api": "^4.3.1",
+    "canvas": "^3.2.0",
+    "ccxt": "^4.5.7",
+    "chalk": "^5.6.2",
+    "chart.js": "^4.5.0",
+    "chartjs-node-canvas": "^5.0.0",
+    "cli-table3": "^0.6.5",
+    "colors": "^1.4.0",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.2"
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "sound-play": "^1.1.0",
+    "sparkly": "^6.0.1",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.18.3"
   },
   "engines": {
     "node": ">=18.x",
     "npm": ">=9.x"
-  }
+  },
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kumas-Galaxy/DigiBot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Kumas-Galaxy/DigiBot/issues"
+  },
+  "homepage": "https://github.com/Kumas-Galaxy/DigiBot#readme"
 }
-
-

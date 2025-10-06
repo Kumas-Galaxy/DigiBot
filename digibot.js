@@ -1,0 +1,342 @@
+// ===============================
+// 🤖 DigiBot (TESTNET)
+// EMA + RSI Dynamic Hybrid (Scalp / Swing / Hedge)
+// Table Alignment + TP/SL Tracking (cli-table3)
+// ===============================
+import ccxt from 'ccxt';
+import chalk from 'chalk';
+import dotenv from 'dotenv';
+import TelegramBot from 'node-telegram-bot-api';
+import Table from 'cli-table3';
+dotenv.config();
+
+// === EXCHANGE (TESTNET) ===
+const exchange = new ccxt.bybit({
+    apiKey: process.env.BYBIT_API_KEY,
+    secret: process.env.BYBIT_API_SECRET,
+    enableRateLimit: true,
+    options: {
+        defaultType: 'spot',
+        urls: {
+            api: {
+                public: 'https://api-testnet.bybit.com',
+                private: 'https://api-testnet.bybit.com'
+            }
+        }
+    }
+});
+
+// === TELEGRAM SETUP ===
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// === BOT CONFIG ===
+let wallet = 1000;
+let vault = 0;
+let symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'LTC/USDT', 'XRP/USDT'];
+let positions = {};
+let cycleTime = 60; // seconds
+let signalWindow = null;
+let hourlySignalsSent = false;
+
+// === HELPERS ===
+function ema(data, period) {
+    const k = 2 / (period + 1);
+    let emaArray = [data[0]];
+    for (let i = 1; i < data.length; i++) {
+        emaArray.push(data[i] * k + emaArray[i - 1] * (1 - k));
+    }
+    return emaArray[data.length - 1];
+}
+
+function rsi(values, period = 14) {
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const diff = values[i] - values[i - 1];
+        if (diff >= 0) gains += diff; else losses -= diff;
+    }
+    const avgGain = gains / period;
+    const avgLoss = losses / period;
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+}
+
+function allocateFunds() {
+    const perPair = wallet / symbols.length;
+    for (let symbol of symbols) {
+        positions[symbol] = {
+            mode: 'WAIT',
+            allocated: perPair,
+            pnl: 0,
+            vault: 0,
+            signal: 'WAIT',
+            entry: 0,
+            tp: 0,
+            sl: 0,
+            reported: false
+        };
+    }
+}
+
+// === FETCH DATA ===
+async function fetchMarketData(symbol) {
+    try {
+        const ohlcv = await exchange.fetchOHLCV(symbol, '1m', undefined, 30);
+        const closes = ohlcv.map(c => c[4]);
+        const price = closes[closes.length - 1];
+        const ema9 = ema(closes, 9);
+        const ema21 = ema(closes, 21);
+        const rsiValue = rsi(closes);
+        return { price, ema9, ema21, rsiValue };
+    } catch (err) {
+        console.log(chalk.red(`❌ Error fetching ${symbol}: ${err.message}`));
+        return null;
+    }
+}
+
+// === TRADE LOGIC ===
+function getSignal(ema9, ema21, rsiValue) {
+    if (rsiValue > 70 && ema9 < ema21) return 'SELL';
+    if (rsiValue < 30 && ema9 > ema21) return 'BUY';
+    return 'WAIT';
+}
+
+function selectMode(rsiValue) {
+    if (rsiValue >= 70) return 'HEDGE';
+    if (rsiValue <= 30) return 'SCALP';
+    return 'SWING';
+}
+
+// === TELEGRAM SIGNAL SENDER ===
+async function sendHourlySignals(signals) {
+    let msg = `📢 <b>DigiBot (TESTNET) - EMA+RSI Hybrid</b>\n🕐 <i>Hourly Trading Signals (5)</i>\n\n`;
+
+    for (const s of signals) {
+        const arrow = s.signal === 'BUY' ? '🔼' : s.signal === 'SELL' ? '🔽' : '⏸';
+        const tp = s.tp ?? (s.price * 1.01);
+        const sl = s.sl ?? (s.price * 0.99);
+
+        msg += `💎 <b>${s.symbol}</b> (${s.mode})\n` +
+               `💰 Entry: ${s.price.toFixed(6)} | RSI: ${s.rsiValue.toFixed(2)}\n` +
+               `EMA9: ${s.ema9.toFixed(6)} | EMA21: ${s.ema21.toFixed(6)}\n` +
+               `📊 Signal: <b>${s.signal}</b> ${arrow}\n` +
+               `🎯 TP: ${tp.toFixed(6)} | ⚠️ SL: ${sl.toFixed(6)}\n\n`;
+    }
+
+    await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
+    console.log(chalk.green(`✅ Sent 5 hourly trade signals to Telegram.`));
+}
+
+async function sendLockedProfitReport(p) {
+    const trend = p.ema9 > p.ema21 ? 'Uptrend 🔼' : 'Downtrend 🔽';
+    const tp = p.tp ?? (p.price * 1.01);
+    const sl = p.sl ?? (p.price * 0.99);
+
+    const msg =
+        `💎 <b>Profit Locked!</b> ${p.symbol}\n\n` +
+        `💰 +$${p.vault.toFixed(2)} locked | Mode: ${p.mode}\n` +
+        `Entry: ${p.entry?.toFixed(6) ?? '-'} | TP: ${tp.toFixed(6)} | SL: ${sl.toFixed(6)}\n` +
+        `RSI: ${p.rsiValue.toFixed(2)} | EMA9: ${p.ema9.toFixed(6)} | EMA21: ${p.ema21.toFixed(6)}\n` +
+        `📈 Trend: ${trend}\n\n` +
+        `🧠 <i>Technical Summary:</i>\n` +
+        (p.rsiValue > 70 ? "RSI reached overbought region, prompting partial exit.\n" :
+         p.rsiValue < 30 ? "RSI oversold recovery detected, trend reversal likely.\n" :
+         "EMA cross suggests sideways consolidation.\n") +
+        `🔒 Total Vault: $${vault.toFixed(2)}`;
+
+    await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML' });
+    console.log(chalk.cyan(`📩 Locked profit report sent for ${p.symbol}`));
+}
+
+// === MAIN LOOP ===
+async function runBot() {
+    console.clear();
+    console.log(chalk.cyan.bold(`🤖 DigiBot (TESTNET) - EMA+RSI Dynamic Hybrid (Scalp / Swing / Hedge)\n`));
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    if (signalWindow !== currentHour) {
+        signalWindow = currentHour;
+        hourlySignalsSent = false;
+    }
+
+    // build table (cli-table3 handles ANSI color codes)
+    const table = new Table({
+        head: [
+            chalk.cyan('Pair'),
+            chalk.cyan('Mode'),
+            chalk.cyan('Price'),
+            chalk.cyan('RSI'),
+            chalk.cyan('EMA9'),
+            chalk.cyan('EMA21'),
+            chalk.cyan('Signal'),
+            chalk.cyan('TP/SL Status'),
+            chalk.cyan('PnL'),
+            chalk.cyan('Vault')
+        ],
+        colWidths: [12, 9, 14, 8, 14, 14, 9, 16, 10, 10],
+        style: { head: [], border: [] }
+    });
+
+    let hourlyBatch = [];
+    let totalVault = 0;
+    let totalPnL = 0;
+    let totalAlloc = 0;
+
+    for (let symbol of symbols) {
+        const data = await fetchMarketData(symbol);
+
+        if (!data) {
+            // Put a placeholder row so table stays aligned even on fetch failure
+            table.push([
+                chalk.white(symbol.replace('/USDT', 'USDT')),
+                chalk.white('ERR'),
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-'
+            ]);
+            continue;
+        }
+
+        const { price, ema9, ema21, rsiValue } = data;
+        const mode = selectMode(rsiValue);
+        const signal = getSignal(ema9, ema21, rsiValue);
+        const alloc = positions[symbol]?.allocated || 0;
+
+        // Initialize entry/tp/sl for first-time entries
+        if (!positions[symbol] || positions[symbol].entry === 0) {
+            positions[symbol] = positions[symbol] || {};
+            positions[symbol].entry = price;
+            positions[symbol].tp = price * 1.01; // 1% TP
+            positions[symbol].sl = price * 0.99; // 1% SL
+            positions[symbol].pnl = positions[symbol].pnl || 0;
+            positions[symbol].vault = positions[symbol].vault || 0;
+            positions[symbol].allocated = positions[symbol].allocated || alloc;
+            positions[symbol].reported = positions[symbol].reported || false;
+        }
+
+        // Simulated pnl movement (your original approach)
+        let pnlChange = 0;
+        if (signal === 'BUY') pnlChange = (Math.random() * 1.5);
+        else if (signal === 'SELL') pnlChange = -(Math.random() * 1.5);
+
+        positions[symbol].pnl += pnlChange;
+        if (!positions[symbol].vault) positions[symbol].vault = 0;
+
+        // TP / SL checking based on market price
+        let status = '---';
+        if (price >= positions[symbol].tp) {
+            status = chalk.green('TP HIT ✅');
+            // lock profit: add unrealized pnl to vault & wallet (as before)
+            positions[symbol].vault += positions[symbol].pnl;
+            wallet += positions[symbol].pnl;
+            vault += positions[symbol].pnl;
+            // send locked profit report (include entry/tp/sl)
+            await sendLockedProfitReport({
+                symbol,
+                ...data,
+                mode,
+                entry: positions[symbol].entry,
+                tp: positions[symbol].tp,
+                sl: positions[symbol].sl,
+                vault: positions[symbol].pnl
+            });
+            positions[symbol].reported = true;
+            positions[symbol].pnl = 0;
+            positions[symbol].entry = price; // reset entry to current price
+            // recompute tp/sl for next leg
+            positions[symbol].tp = positions[symbol].entry * 1.01;
+            positions[symbol].sl = positions[symbol].entry * 0.99;
+        } else if (price <= positions[symbol].sl) {
+            status = chalk.red('SL HIT ❌');
+            wallet += positions[symbol].pnl; // apply current pnl (could be negative)
+            positions[symbol].pnl = 0;
+            positions[symbol].entry = price;
+            positions[symbol].tp = positions[symbol].entry * 1.01;
+            positions[symbol].sl = positions[symbol].entry * 0.99;
+            positions[symbol].reported = false;
+        }
+
+        totalVault += positions[symbol].vault;
+        totalPnL += positions[symbol].pnl;
+        totalAlloc += positions[symbol].allocated || alloc;
+
+        const signalColor =
+            signal === 'BUY' ? chalk.green(signal) :
+            signal === 'SELL' ? chalk.red(signal) :
+            chalk.yellow(signal);
+
+        const pnlColor =
+            positions[symbol].pnl > 0 ? chalk.green(`${positions[symbol].pnl.toFixed(2)}%`) :
+            positions[symbol].pnl < 0 ? chalk.red(`${positions[symbol].pnl.toFixed(2)}%`) :
+            chalk.white(`${positions[symbol].pnl.toFixed(2)}%`);
+
+        const vaultColor =
+            positions[symbol].vault > 0 ? chalk.greenBright(`$${positions[symbol].vault.toFixed(2)}`) : chalk.white(`$${positions[symbol].vault.toFixed(2)}`);
+
+        table.push([
+            chalk.white(symbol.replace('/USDT', 'USDT')),
+            (mode === 'HEDGE' ? chalk.red(mode) : mode === 'SCALP' ? chalk.green(mode) : chalk.cyan(mode)),
+            chalk.white(price.toFixed(6)),
+            chalk.magenta(rsiValue.toFixed(2)),
+            chalk.white(ema9.toFixed(6)),
+            chalk.white(ema21.toFixed(6)),
+            signalColor,
+            status,
+            pnlColor,
+            vaultColor
+        ]);
+
+        // Add to hourly batch with tp/sl for Telegram
+        hourlyBatch.push({
+            symbol,
+            price,
+            ema9,
+            ema21,
+            rsiValue,
+            signal,
+            mode,
+            tp: positions[symbol].tp,
+            sl: positions[symbol].sl
+        });
+    }
+
+    console.log(table.toString());
+
+    const freeBalance = wallet - totalAlloc;
+    const equity = wallet + totalPnL;
+    const pnlSummaryColor =
+        totalPnL >= 0 ? chalk.green(totalPnL.toFixed(2)) : chalk.red(totalPnL.toFixed(2));
+
+    console.log(
+        chalk.bold(
+            `\n💰 Wallet: ${wallet.toFixed(2)} USDT | 🧩 Allocated: ${totalAlloc.toFixed(2)} | 🆓 Free: ${freeBalance.toFixed(2)} | ` +
+            `📊 Equity: ${equity.toFixed(2)} | 🔒 Vault: ${chalk.greenBright(vault.toFixed(2))} | 📈 Total PnL: ${pnlSummaryColor}\n`
+        )
+    );
+
+    // === Hourly signal broadcast ===
+    if (!hourlySignalsSent && hourlyBatch.length >= 5) {
+        const bestFive = hourlyBatch.slice(0, 5);
+        await sendHourlySignals(bestFive);
+        hourlySignalsSent = true;
+    }
+
+    // === Countdown ===
+    for (let i = cycleTime; i >= 0; i--) {
+        process.stdout.write(`⏳ Next cycle in ${i}s...\r`);
+        await new Promise(r => setTimeout(r, 1000));
+    }
+
+    runBot();
+}
+
+// === INIT ===
+allocateFunds();
+runBot();

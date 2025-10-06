@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
+import "./telegram.js";
+
 
 // Load environment variables
 dotenv.config();
