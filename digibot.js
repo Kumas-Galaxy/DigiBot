@@ -10,7 +10,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import Table from 'cli-table3';
 dotenv.config();
 
-// === EXCHANGE (TESTNET) ===
+// === EXCHANGE (TESTNET) VIA PROXY ===
 const exchange = new ccxt.bybit({
     apiKey: process.env.BYBIT_API_KEY,
     secret: process.env.BYBIT_API_SECRET,
@@ -19,12 +19,14 @@ const exchange = new ccxt.bybit({
         defaultType: 'spot',
         urls: {
             api: {
-                public: 'https://api-testnet.bybit.com',
-                private: 'https://api-testnet.bybit.com'
+                public: 'http://localhost:3001/api',  // Local proxy
+                private: 'http://localhost:3001/api'
             }
         }
     }
 });
+
+
 
 // === TELEGRAM SETUP ===
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
