@@ -8,6 +8,9 @@ import chalk from 'chalk';
 import dotenv from 'dotenv';
 import TelegramBot from 'node-telegram-bot-api';
 import Table from 'cli-table3';
+// === AUTO-START LOCAL PROXY ===
+import './bybit-proxy.js';
+
 dotenv.config();
 
 // === EXCHANGE (TESTNET) VIA PROXY (Render-hosted) ===

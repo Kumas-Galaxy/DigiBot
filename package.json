@@ -15,5 +15,10 @@
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5"
   }
+"scripts": {
+  "start": "node dashboard.js",
+  "proxy": "node bybit-proxy.js"
+}
+
 }
 

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kumas DigiBot — Final Chart + Markers</title>
+<script src="https://unpkg.com/lightweight-charts@4.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  body { margin:0; background:#111; color:#eee; font-family:Inter, sans-serif; }
+  header { padding:10px; font-size:18px; background: linear-gradient(135deg,#36d1dc,#5b86e5); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  #controls { display:flex; gap:10px; align-items:center; }
+  select,input,button { padding:6px 8px; border-radius:6px; border:none; }
+  table { width:95%; margin:10px auto; border-collapse:collapse; }
+  th,td { padding:6px 8px; border-bottom:1px solid #333; text-align:center; }
+  th { background: linear-gradient(135deg,#ff512f,#dd2476); }
+  .green{color:#7efc9a}.red{color:#ff8b8b}.gray{color:#ccc}
+  #chart{height:420px; margin:10px auto; max-width:1100px}
+  #rsi-chart{height:120px; margin:0 auto; max-width:1100px}
+  #beta-banner{position:absolute; top:10px; left:10px; padding:6px 10px; background:#ff0; color:#111; font-weight:bold; animation:flash 1s infinite; z-index:1000;}
+  @keyframes flash{0%,50%,100%{opacity:1}25%,75%{opacity:0}}
+  .small { font-size:13px; color:#ccc; margin-left:8px; }
+
+
+.live-warning {
+  background: linear-gradient(90deg, #ff0000, #ff7300, #ff0000);
+  color: #fff;
+  font-weight: bold;
+  text-align: center;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 10px auto;
+  max-width: 800px;
+  font-size: 15px;
+  animation: glow 1.2s ease-in-out infinite;
+}
+.hidden { display: none; }
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 8px #ff0000; }
+  50% { box-shadow: 0 0 20px #ff7300; }
+}
+
+
+</style>
+</head>
+<body>
+<div id="beta-banner">⚡ Beta Mode Coming Soon ⚡</div>
+
+<header>
+  <div style="display:flex; gap:12px; align-items:center;">
+    <div>🤖 Kumas DigiBot — Final Chart + Markers</div>
+    <div class="small">| test run</div>
+  </div>
+
+  <div id="controls">
+    Pair:
+    <select id="pairSelect">
+      <option>BTCUSDT</option>
+      <option>ETHUSDT</option>
+      <option>LTCUSDT</option>
+      <option>BNBUSDT</option>
+      <option>XRPUSDT</option>
+    </select>
+
+    Alloc:
+    <input id="allocInput" type="number" value="100" style="width:84px" />
+
+    Mode:
+    <select id="modeSelect"><option value="paper" selected>Paper</option><option value="live">Live</option></select>
+
+    <label style="color:#ccc; font-size:13px; display:flex; align-items:center; gap:6px;">
+      <input id="toggleMarkers" type="checkbox" checked /> Show markers
+    </label>
+
+    <button id="startBtn" style="background:#00d4ff; color:#02121a">Start</button>
+    <button id="stopBtn" style="background:#ff512f; color:white">Stop</button>
+  </div>
+</header>
+
+<div style="max-width:1100px; margin:12px auto; display:flex; gap:12px; align-items:center;">
+  <div id="signals" class="gray">Signals: Idle</div>
+  <div id="status" class="gray">status: idle</div>
+
+<div id="live-warning" class="live-warning hidden">
+  🚨 LIVE TRADING ACTIVE — ORDERS WILL BE SENT TO BYBIT 🚨
+</div>
+
+
+
+  <div style="margin-left:auto; display:flex; gap:8px;">
+    <div id="global-pnl" style="padding:8px 12px; background:linear-gradient(135deg,#ff512f,#dd2476); border-radius:6px;">Global PnL: $0.00</div>
+    <div id="withdrawable-pnl" style="padding:8px 12px; background:linear-gradient(135deg,#36d1dc,#5b86e5); border-radius:6px;">Withdrawable PnL: $0.00</div>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Pair</th><th>Side/Mode</th><th>Entry</th><th>Alloc</th><th>Mark Price</th><th>Floating PnL</th><th>Locked Profit</th><th>Last Action</th>
+    </tr>
+  </thead>
+  <tbody id="botTable"></tbody>
+</table>
+
+<div id="chart"></div>
+<div id="rsi-chart"></div>
+
+<script>
+/* ====== Core prototype with improved scaling + markers ====== */
+
+const $ = id => document.getElementById(id);
+
+let running = false;
+const pairs = ["BTCUSDT","ETHUSDT","LTCUSDT","BNBUSDT","XRPUSDT"];
+const strategies = {BTCUSDT:'Hedge',ETHUSDT:'Swing',LTCUSDT:'Scalp',BNBUSDT:'Swing',XRPUSDT:'Scalp'};
+const positions = {}; // per-pair state {side,entry,allocated,locked,lastAction,markers:[]}
+const candlesMap = {}; // per-pair candle arrays
+
+pairs.forEach(p => {
+  positions[p] = { side:'', entry:0, allocated:0, locked:0, lastAction:'Idle', strategy: strategies[p], markers: [] };
+});
+
+// --- Seed candles with slightly larger, but realistic vol ---
+pairs.forEach(p => {
+  candlesMap[p] = [];
+  const base = p==='BTCUSDT'?28000: p==='ETHUSDT'?1800: p==='LTCUSDT'?90: p==='BNBUSDT'?350: 0.5;
+  let t = Math.floor(Date.now()/1000) - 60*120; // 120 bars back
+  let price = base;
+  for(let i=0;i<120;i++){
+    // Slightly larger seed volatility: 0.4% - 1% depending on base
+    const volatility = Math.max( Math.abs(price) * (Math.random()*0.008 + 0.002), 0.0005 );
+    const change = (Math.random()-0.5)*2*volatility;
+    const open = price;
+    const close = +(open + change);
+    const high = Math.max(open, close) + Math.abs(Math.random()*volatility*0.6);
+    const low  = Math.min(open, close) - Math.abs(Math.random()*volatility*0.6);
+    candlesMap[p].push({ time: t + i*60, open: +open, high: +high, low: +low, close: +close });
+    price = close;
+  }
+});
+
+// --- Chart setup & scaling protections ---
+const chart = LightweightCharts.createChart($('chart'), {
+  layout: { background: { color:'#111' }, textColor: '#eee' },
+  grid: { vertLines:{ color:'#222' }, horzLines:{ color:'#222' } },
+  rightPriceScale: { scaleMargins: { top: 0.16, bottom: 0.16 } },
+  timeScale: { timeVisible:true, secondsVisible:false },
+  localization: { priceFormatter: price => price.toFixed(6) }
+});
+
+const candleSeries = chart.addCandlestickSeries({
+  upColor: '#26a69a', downColor: '#ef5350', wickUpColor:'#26a69a', wickDownColor:'#ef5350', borderVisible:false
+});
+
+// apply options to prevent marker-induced squeeze
+chart.priceScale('right').applyOptions({
+  scaleMargins: { top: 0.18, bottom: 0.18 },
+  // keep autoscale true but leave margins
+});
+
+const fastMA = chart.addLineSeries({ color:'#00ffff', lineWidth:2 });
+const slowMA = chart.addLineSeries({ color:'#ff00ff', lineWidth:2 });
+
+// RSI below
+const rsiChart = LightweightCharts.createChart($('rsi-chart'), {
+  layout: { background: { color:'#111' }, textColor: '#eee' },
+  grid: { vertLines:{ color:'#222' }, horzLines:{ color:'#222' } },
+  rightPriceScale: { scaleMargins: { top:0.2, bottom:0.2 } },
+  timeScale: { timeVisible:true, secondsVisible:false }
+});
+const rsiSeries = rsiChart.addLineSeries({ color:'#ff8b8b', lineWidth:2 });
+
+// helpers: MA & RSI (efficient-ish)
+function calcMA(data, period){
+  const out = [];
+  let s = 0;
+  for(let i=0;i<data.length;i++){
+    s += data[i].close;
+    if(i>=period) s -= data[i-period].close;
+    out.push({ time: data[i].time, value: i >= period-1 ? s / period : null });
+  }
+  return out;
+}
+
+function calcRSI(data, period=14){
+  const out=[];
+  for(let i=0;i<data.length;i++){
+    if(i===0){ out.push({time:data[i].time, value:50}); continue; }
+    let gains=0, losses=0;
+    const start = Math.max(1, i-period+1);
+    for(let j=start; j<=i; j++){
+      const d = data[j].close - data[j-1].close;
+      if(d>0) gains += d; else losses += Math.abs(d);
+    }
+    const avgG = gains / period;
+    const avgL = losses / period;
+    const RS = avgL ? (avgG/avgL) : 0;
+    const val = 100 - (100 / (1 + RS));
+    out.push({ time: data[i].time, value: isFinite(val) ? val : 50 });
+  }
+  return out;
+}
+
+function getSignal(candleArr){
+  if(candleArr.length < 25) return 'Idle';
+  const fast = calcMA(candleArr,9).slice(-1)[0].value;
+  const slow = calcMA(candleArr,21).slice(-1)[0].value;
+  const rsi = calcRSI(candleArr,14).slice(-1)[0].value;
+  if(fast === null || slow === null) return 'Idle';
+  if(fast > slow && rsi < 40) return 'Buy';
+  if(fast < slow && rsi > 60) return 'Sell';
+  return 'Idle';
+}
+
+// PnL: Bybit-style linear (contracts = allocated / entry)
+function calcFloatingPNL(pos, mark){
+  if(!pos.side) return 0;
+  const contracts = pos.allocated / pos.entry;
+  return contracts * (mark - pos.entry) * (pos.side === 'Long' ? 1 : -1);
+}
+
+// Render / populate functions
+function populateTable(){
+  let global = 0, withdraw = 0;
+  const tbody = $('botTable'); tbody.innerHTML = '';
+  const mode = $('modeSelect').value;
+  for(const pair of pairs){
+    const cand = candlesMap[pair];
+    const mark = cand[cand.length-1].close;
+    const pos = positions[pair];
+    const signal = getSignal(cand);
+    const alloc = parseFloat($('allocInput').value) || 100;
+
+    if(mode === 'paper'){
+      if(signal === 'Buy' && !pos.side){
+        pos.side = 'Long'; pos.entry = mark; pos.allocated = alloc; pos.lastAction = 'Buy';
+        addMarker(pair, cand[cand.length-1].time, 'belowBar', '#0f0','arrowUp','Buy');
+      } else if(signal === 'Sell' && !pos.side){
+        pos.side = 'Short'; pos.entry = mark; pos.allocated = alloc; pos.lastAction = 'Sell';
+        addMarker(pair, cand[cand.length-1].time, 'aboveBar', '#f00','arrowDown','Sell');
+      } else if(signal === 'Idle' && pos.side){
+        const pnl = calcFloatingPNL(pos, mark);
+        if(pnl > 0) pos.locked += pnl;
+        pos.side = ''; pos.entry = 0; pos.allocated = 0; pos.lastAction = 'Idle';
+        addMarker(pair, cand[cand.length-1].time, 'belowBar', '#fff','circle','Close');
+      }
+    } else {
+      // live preview: don't execute
+      pos.lastAction = signal;
+    }
+
+    const floating = calcFloatingPNL(pos, mark);
+    global += floating; withdraw += pos.locked;
+
+    const sideOrMode = pos.side ? pos.side : pos.strategy;
+    tbody.innerHTML += `<tr>
+      <td>${pair}</td>
+      <td>${sideOrMode}</td>
+      <td>${pos.entry ? pos.entry.toFixed(6) : '-'}</td>
+      <td>${pos.allocated ? pos.allocated.toFixed(2) : '-'}</td>
+      <td>${mark.toFixed(6)}</td>
+      <td class="${floating>=0?'green':'red'}">${floating.toFixed(2)}</td>
+      <td class="green">${pos.locked.toFixed(2)}</td>
+      <td class="${pos.lastAction==='Buy'?'green':pos.lastAction==='Sell'?'red':'gray'}">${pos.lastAction}</td>
+    </tr>`;
+  }
+  $('global-pnl').textContent = `Global PnL: $${global.toFixed(2)}`;
+  $('withdrawable-pnl').textContent = `Withdrawable PnL: $${withdraw.toFixed(2)}`;
+
+  const sel = $('pairSelect').value;
+  const sig = getSignal(candlesMap[sel]);
+  $('signals').textContent = `Signals: ${sig}`;
+  $('signals').className = sig === 'Buy' ? 'green' : sig === 'Sell' ? 'red' : 'gray';
+}
+
+// MARKERS: add and cap markers per pair to avoid overload
+function addMarker(pair, time, position, color, shape, text){
+  const pos = positions[pair];
+  // cap markers at 60 to avoid huge arrays
+  if(!pos.markers) pos.markers = [];
+  pos.markers.push({ time, position, color, shape, text });
+  if(pos.markers.length > 60) pos.markers.shift();
+}
+
+// Chart update for selected pair (sets data then markers)
+function updateChartForSelected(){
+  const sel = $('pairSelect').value;
+  const arr = candlesMap[sel];
+  // setData (replace entire dataset; light-weight-charts handles performance OK for ~200 bars)
+  candleSeries.setData(arr.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+  // MAs and RSI - filter nulls for MA series to avoid invalid values
+  const fast = calcMA(arr,9).filter(p => p.value !== null).map(p => ({ time: p.time, value: p.value }));
+  const slow = calcMA(arr,21).filter(p => p.value !== null).map(p => ({ time: p.time, value: p.value }));
+  fastMA.setData(fast);
+  slowMA.setData(slow);
+  rsiSeries.setData(calcRSI(arr,14));
+
+  // Apply markers only if toggle enabled
+  if($('toggleMarkers').checked){
+    // convert our marker format to lightweight-charts marker objects
+    const m = (positions[sel].markers || []).map(mt => ({
+      time: mt.time,
+      position: mt.position,
+      color: mt.color,
+      shape: mt.shape,
+      text: mt.text
+    }));
+    // set markers AFTER setData (helps avoid some reflow artifacts)
+    candleSeries.setMarkers(m);
+  } else {
+    candleSeries.setMarkers([]);
+  }
+
+  // Fit content (keeps last bars visible and uses margins)
+  chart.timeScale().fitContent();
+}
+
+// Evolve candles - increased but controlled vol to avoid flattening
+function tick(){
+  if(!running) return;
+  // update each pair
+  pairs.forEach(pair => {
+    const arr = candlesMap[pair];
+    const last = arr[arr.length-1];
+    const nextTime = last.time + 60;
+    // controlled volatility: ~0.4% - 1.2% for small-cap, smaller for large
+    const volBase = Math.max(Math.abs(last.close) * (Math.random()*0.01 + 0.003), 0.0005);
+    const change = (Math.random()-0.5)*2*volBase;
+    const open = last.close;
+    const close = +(open + change);
+    const high = Math.max(open,close) + Math.abs(Math.random()*volBase*0.6);
+    const low  = Math.min(open,close) - Math.abs(Math.random()*volBase*0.6);
+    arr.push({ time: nextTime, open:+open, high:+high, low:+low, close:+close });
+    if(arr.length > 300) arr.shift();
+  });
+
+  updateChartForSelected();
+  populateTable();
+
+  // schedule next
+  setTimeout(tick, 1000);
+}
+
+// UI controls
+$('startBtn').onclick = () => {
+  if($('modeSelect').value === 'live'){
+    // if live mode, we require API inputs — we will not actually place orders here (server required)
+    if(!$('apiKey').value || !$('apiSecret').value){
+      alert('Enter API Key & Secret for Live Mode (they are not stored).');
+      return;
+    }
+    $('status').textContent = 'status: running (live preview)';
+  } else {
+    $('status').textContent = 'status: running';
+  }
+  running = true;
+  tick();
+};
+
+$('stopBtn').onclick = () => {
+  running = false;
+  $('status').textContent = 'status: stopped';
+};
+
+$('pairSelect').onchange = () => { updateChartForSelected(); populateTable(); };
+
+// initial draw
+updateChartForSelected();
+populateTable();
+
+
+function updateLiveWarning() {
+  const mode = document.getElementById("modeSelect").value;
+  const banner = document.getElementById("live-warning");
+  if (mode === "live") {
+    banner.classList.remove("hidden");
+  } else {
+    banner.classList.add("hidden");
+  }
+}
+
+// Update when Mode changes
+document.getElementById("modeSelect").addEventListener("change", updateLiveWarning);
+
+// Run once on load
+updateLiveWarning();
+
+
+</script>
+</body>
+</html>
+
