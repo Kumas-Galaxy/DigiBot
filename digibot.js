@@ -10,7 +10,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import Table from 'cli-table3';
 dotenv.config();
 
-// === EXCHANGE (TESTNET) VIA PROXY ===
+// === EXCHANGE (TESTNET) VIA PROXY (Render-hosted) ===
 const exchange = new ccxt.bybit({
     apiKey: process.env.BYBIT_API_KEY,
     secret: process.env.BYBIT_API_SECRET,
@@ -19,14 +19,12 @@ const exchange = new ccxt.bybit({
         defaultType: 'spot',
         urls: {
             api: {
-                public: 'http://localhost:3001/api',  // Local proxy
-                private: 'http://localhost:3001/api'
+                public: 'https://kumas-digibbot.onrender.com/api',
+                private: 'https://kumas-digibbot.onrender.com/api'
             }
         }
     }
 });
-
-
 
 // === TELEGRAM SETUP ===
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
