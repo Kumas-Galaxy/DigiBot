@@ -83,6 +83,7 @@ function allocateFunds() {
     }
 }
 
+
 // === FETCH DATA ===
 async function fetchMarketData(symbol) {
     try {
@@ -92,12 +93,21 @@ async function fetchMarketData(symbol) {
         const ema9 = ema(closes, 9);
         const ema21 = ema(closes, 21);
         const rsiValue = rsi(closes);
+
+        // --- DEBUG LOGS ---
+        console.log(`--- ${symbol} ---`);
+        console.log(`Close Prices (last 5): ${closes.slice(-5).map(p => p.toFixed(2))}`);
+        console.log(`EMA9: ${ema9.slice(-1)[0]?.toFixed(2)} | EMA21: ${ema21.slice(-1)[0]?.toFixed(2)}`);
+        console.log(`RSI: ${rsiValue.slice(-1)[0]?.toFixed(2)}`);
+        console.log('---------------------');
+
         return { price, ema9, ema21, rsiValue };
     } catch (err) {
         console.log(chalk.red(`❌ Error fetching ${symbol}: ${err.message}`));
         return null;
     }
 }
+
 
 // === TRADE LOGIC ===
 function getSignal(ema9, ema21, rsiValue) {
