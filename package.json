@@ -2,18 +2,18 @@
   "name": "digibot",
   "version": "1.0.0",
   "type": "module",
-  "main": "digibot.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node digibot.js"
+    "start": "node server.js"
   },
   "dependencies": {
+    "express": "^5.1.0",
+    "dotenv": "^17.2.3",
+    "cors": "^2.8.5",
+    "node-telegram-bot-api": "^0.66.0",
     "ccxt": "^4.5.7",
     "chalk": "^5.6.2",
-    "dotenv": "^17.2.3",
-    "node-telegram-bot-api": "^0.66.0",
-    "express": "^5.1.0"
-  },
-  "engines": {
-    "node": ">=18.x"
+    "cli-table3": "^0.6.5"
   }
 }
+
