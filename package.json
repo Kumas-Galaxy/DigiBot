@@ -4,21 +4,18 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node dashboard.js",
+    "server": "node server.js",
+    "proxy": "node bybit-proxy.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "dotenv": "^17.2.3",
-    "cors": "^2.8.5",
-    "node-telegram-bot-api": "^0.66.0",
     "ccxt": "^4.5.7",
     "chalk": "^5.6.2",
-    "cli-table3": "^0.6.5"
+    "cli-table3": "^0.6.5",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.66.0"
   }
-"scripts": {
-  "start": "node dashboard.js",
-  "proxy": "node bybit-proxy.js"
 }
-
-}
-

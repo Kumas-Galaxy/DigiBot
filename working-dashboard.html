@@ -102,96 +102,138 @@
 <script>
 const $ = id => document.getElementById(id);
 
-// === CONFIG ===
-const LOCAL_PROXY = "http://localhost:3001";
-const RENDER_PROXY = "https://kumas-digibot.onrender.com";
-const API_BASE = window.location.hostname.includes("localhost") ? LOCAL_PROXY : RENDER_PROXY;
-
-// === GLOBALS ===
 let running = false;
-const pairs = ["BTCUSDT", "ETHUSDT", "LTCUSDT", "BNBUSDT", "XRPUSDT"];
-const strategies = { BTCUSDT:'Hedge', ETHUSDT:'Swing', LTCUSDT:'Scalp', BNBUSDT:'Swing', XRPUSDT:'Scalp' };
+const pairs = ["BTCUSDT","ETHUSDT","LTCUSDT","BNBUSDT","XRPUSDT"];
+const strategies = {BTCUSDT:'Hedge',ETHUSDT:'Swing',LTCUSDT:'Scalp',BNBUSDT:'Swing',XRPUSDT:'Scalp'};
 const positions = {};
 const candlesMap = {};
 
-// === INITIALIZE ===
 pairs.forEach(p => {
-  positions[p] = { side:'', entry:0, allocated:0, locked:0, lastAction:'Idle', strategy:strategies[p], markers:[] };
+  positions[p] = { side:'', entry:0, allocated:0, locked:0, lastAction:'Idle', strategy: strategies[p], markers: [] };
   candlesMap[p] = [];
+  const base = p==='BTCUSDT'?28000: p==='ETHUSDT'?1800: p==='LTCUSDT'?90: p==='BNBUSDT'?350: 0.5;
+  let t = Math.floor(Date.now()/1000) - 60*120;
+  let price = base;
+  for(let i=0;i<120;i++){
+    const volatility = Math.max(Math.abs(price)*(Math.random()*0.008+0.002),0.0005);
+    const change = (Math.random()-0.5)*2*volatility;
+    const open = price;
+    const close = +(open + change);
+    const high = Math.max(open,close) + Math.abs(Math.random()*volatility*0.6);
+    const low  = Math.min(open,close) - Math.abs(Math.random()*volatility*0.6);
+    candlesMap[p].push({ time: t + i*60, open:+open, high:+high, low:+low, close:+close });
+    price = close;
+  }
 });
 
-// === FETCH KLINES FROM PROXY ===
-async function fetchKlines(symbol) {
-  try {
-    const url = `${API_BASE}/klines?symbol=${symbol}&interval=1&category=spot`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (!data.result || !data.result.list) throw new Error("Invalid response");
-    const klines = data.result.list.map(item => ({
-      time: Math.floor(item[0] / 1000),
-      open: +item[1],
-      high: +item[2],
-      low: +item[3],
-      close: +item[4]
-    })).reverse();
-    candlesMap[symbol] = klines;
-    console.log(`✅ Loaded ${symbol} klines (${klines.length})`);
-  } catch (err) {
-    console.error(`❌ Failed to fetch klines for ${symbol}:`, err.message);
-  }
-}
+// Charts
+const chart = LightweightCharts.createChart($('chart'), { layout:{background:{color:'#111'},textColor:'#eee'}, grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}}, rightPriceScale:{scaleMargins:{top:0.16,bottom:0.16}}, timeScale:{timeVisible:true,secondsVisible:false}, localization:{priceFormatter:p=>p.toFixed(6)}});
+const candleSeries = chart.addCandlestickSeries({upColor:'#26a69a', downColor:'#ef5350', wickUpColor:'#26a69a', wickDownColor:'#ef5350', borderVisible:false});
+chart.priceScale('right').applyOptions({scaleMargins:{top:0.18,bottom:0.18}});
+const fastMA = chart.addLineSeries({color:'#00ffff', lineWidth:2});
+const slowMA = chart.addLineSeries({color:'#ff00ff', lineWidth:2});
 
-// === INDICATOR FUNCTIONS ===
-function calcMA(data, period) {
-  const out = []; let s = 0;
-  for (let i=0; i<data.length; i++) {
-    s += data[i].close;
-    if (i >= period) s -= data[i-period].close;
-    out.push({ time: data[i].time, value: i>=period-1 ? s/period : null });
+const rsiChart = LightweightCharts.createChart($('rsi-chart'), { layout:{background:{color:'#111'},textColor:'#eee'}, grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}}, rightPriceScale:{scaleMargins:{top:0.2,bottom:0.2}}, timeScale:{timeVisible:true,secondsVisible:false}});
+const rsiSeries = rsiChart.addLineSeries({color:'#ff8b8b', lineWidth:2});
+
+function calcMA(data,period){
+  const out=[]; let s=0;
+  for(let i=0;i<data.length;i++){
+    s+=data[i].close;
+    if(i>=period) s-=data[i-period].close;
+    out.push({time:data[i].time, value:i>=period-1?s/period:null});
   }
   return out;
 }
 
-function calcRSI(data, period=14) {
-  const out=[]; for(let i=0;i<data.length;i++){
-    if(i===0){ out.push({time:data[i].time,value:50}); continue; }
-    let gains=0,losses=0;
-    const start=Math.max(1,i-period+1);
+function calcRSI(data,period=14){
+  const out=[];
+  for(let i=0;i<data.length;i++){
+    if(i===0){ out.push({time:data[i].time, value:50}); continue; }
+    let gains=0, losses=0;
+    const start = Math.max(1,i-period+1);
     for(let j=start;j<=i;j++){
-      const d=data[j].close-data[j-1].close;
+      const d = data[j].close - data[j-1].close;
       if(d>0) gains+=d; else losses+=Math.abs(d);
     }
-    const RS=losses?(gains/period)/(losses/period):0;
-    const val=100-(100/(1+RS));
-    out.push({time:data[i].time,value:isFinite(val)?val:50});
+    const avgG = gains/period;
+    const avgL = losses/period;
+    const RS = avgL? (avgG/avgL):0;
+    const val = 100 - (100/(1+RS));
+    out.push({time:data[i].time, value:isFinite(val)?val:50});
   }
   return out;
 }
 
-function getSignal(arr){
-  if(arr.length<25) return 'Idle';
-  const fast=calcMA(arr,9).slice(-1)[0].value;
-  const slow=calcMA(arr,21).slice(-1)[0].value;
-  const rsi=calcRSI(arr,14).slice(-1)[0].value;
+function getSignal(candleArr){
+  if(candleArr.length<25) return 'Idle';
+  const fast = calcMA(candleArr,9).slice(-1)[0].value;
+  const slow = calcMA(candleArr,21).slice(-1)[0].value;
+  const rsi = calcRSI(candleArr,14).slice(-1)[0].value;
   if(fast===null||slow===null) return 'Idle';
   if(fast>slow && rsi<40) return 'Buy';
   if(fast<slow && rsi>60) return 'Sell';
   return 'Idle';
 }
 
-function calcFloatingPNL(pos, mark){
+function calcFloatingPNL(pos,mark){
   if(!pos.side) return 0;
   const contracts = pos.allocated/pos.entry;
   return contracts*(mark-pos.entry)*(pos.side==='Long'?1:-1);
 }
 
-// === CHARTS ===
-const chart = LightweightCharts.createChart($('chart'), { layout:{background:{color:'#111'},textColor:'#eee'}, grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}}, rightPriceScale:{scaleMargins:{top:0.16,bottom:0.16}}, timeScale:{timeVisible:true,secondsVisible:false}});
-const candleSeries = chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false});
-const fastMA = chart.addLineSeries({color:'#00ffff',lineWidth:2});
-const slowMA = chart.addLineSeries({color:'#ff00ff',lineWidth:2});
-const rsiChart = LightweightCharts.createChart($('rsi-chart'), {layout:{background:{color:'#111'},textColor:'#eee'},grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}},rightPriceScale:{scaleMargins:{top:0.2,bottom:0.2}},timeScale:{timeVisible:true,secondsVisible:false}});
-const rsiSeries = rsiChart.addLineSeries({color:'#ff8b8b',lineWidth:2});
+function populateTable(){
+  let global=0, withdraw=0;
+  const tbody=$('botTable'); tbody.innerHTML='';
+  const mode = $('modeSelect').value;
+  for(const pair of pairs){
+    const cand=candlesMap[pair];
+    const mark=cand[cand.length-1].close;
+    const pos=positions[pair];
+    const signal=getSignal(cand);
+    const alloc=parseFloat($('allocInput').value)||100;
+
+    if(mode==='paper'){
+      if(signal==='Buy' && !pos.side){
+        pos.side='Long'; pos.entry=mark; pos.allocated=alloc; pos.lastAction='Buy';
+        addMarker(pair,cand[cand.length-1].time,'belowBar','#0f0','arrowUp','Buy');
+      } else if(signal==='Sell' && !pos.side){
+        pos.side='Short'; pos.entry=mark; pos.allocated=alloc; pos.lastAction='Sell';
+        addMarker(pair,cand[cand.length-1].time,'aboveBar','#f00','arrowDown','Sell');
+      } else if(signal==='Idle' && pos.side){
+        const pnl=calcFloatingPNL(pos,mark);
+        if(pnl>0) pos.locked+=pnl;
+        pos.side=''; pos.entry=0; pos.allocated=0; pos.lastAction='Idle';
+        addMarker(pair,cand[cand.length-1].time,'belowBar','#fff','circle','Close');
+      }
+    } else {
+      pos.lastAction=signal;
+    }
+
+    const floating=calcFloatingPNL(pos,mark);
+    global+=floating; withdraw+=pos.locked;
+
+    const sideOrMode = pos.side? pos.side: pos.strategy;
+
+    tbody.innerHTML+=`<tr id="row-${pair}">
+      <td data-field="pair">${pair}</td>
+      <td data-field="side">${sideOrMode}</td>
+      <td data-field="entry">${pos.entry?pos.entry.toFixed(6):'-'}</td>
+      <td data-field="allocated">${pos.allocated?pos.allocated.toFixed(2):'-'}</td>
+      <td data-field="mark">${mark.toFixed(6)}</td>
+      <td data-field="floatingPNL" class="${floating>=0?'green':'red'}">${floating.toFixed(2)}</td>
+      <td data-field="lockedPNL" class="green">${pos.locked.toFixed(2)}</td>
+      <td data-field="lastAction" class="${pos.lastAction==='Buy'?'green':pos.lastAction==='Sell'?'red':'gray'}">${pos.lastAction}</td>
+    </tr>`;
+  }
+  $('globalPnL').textContent=`Global PnL: $${global.toFixed(2)}`;
+  $('withdrawablePnL').textContent=`Withdrawable PnL: $${withdraw.toFixed(2)}`;
+
+  const sel=$('pairSelect').value;
+  const sig=getSignal(candlesMap[sel]);
+  $('signals').textContent=`Signals: ${sig}`;
+  $('signals').className=sig==='Buy'?'green':sig==='Sell'?'red':'gray';
+}
 
 function addMarker(pair,time,position,color,shape,text){
   const pos=positions[pair];
@@ -200,89 +242,55 @@ function addMarker(pair,time,position,color,shape,text){
   if(pos.markers.length>60) pos.markers.shift();
 }
 
-// === TABLE UPDATER ===
-function populateTable(){
-  let global=0, withdraw=0;
-  const tbody=$('botTable'); tbody.innerHTML='';
-  const mode=$('modeSelect').value;
-  for(const pair of pairs){
-    const arr=candlesMap[pair];
-    if(!arr || arr.length===0) continue;
-    const mark=arr[arr.length-1].close;
-    const pos=positions[pair];
-    const signal=getSignal(arr);
-    const alloc=parseFloat($('allocInput').value)||100;
-
-    if(mode==='paper'){
-      if(signal==='Buy' && !pos.side){
-        pos.side='Long'; pos.entry=mark; pos.allocated=alloc; pos.lastAction='Buy';
-        addMarker(pair,arr[arr.length-1].time,'belowBar','#0f0','arrowUp','Buy');
-      } else if(signal==='Sell' && !pos.side){
-        pos.side='Short'; pos.entry=mark; pos.allocated=alloc; pos.lastAction='Sell';
-        addMarker(pair,arr[arr.length-1].time,'aboveBar','#f00','arrowDown','Sell');
-      } else if(signal==='Idle' && pos.side){
-        const pnl=calcFloatingPNL(pos,mark);
-        if(pnl>0) pos.locked+=pnl;
-        pos.side=''; pos.entry=0; pos.allocated=0; pos.lastAction='Idle';
-        addMarker(pair,arr[arr.length-1].time,'belowBar','#fff','circle','Close');
-      }
-    } else pos.lastAction=signal;
-
-    const floating=calcFloatingPNL(pos,mark);
-    global+=floating; withdraw+=pos.locked;
-    const sideOrMode=pos.side?pos.side:pos.strategy;
-
-    tbody.innerHTML+=`
-      <tr>
-        <td>${pair}</td>
-        <td>${sideOrMode}</td>
-        <td>${pos.entry?pos.entry.toFixed(2):'-'}</td>
-        <td>${pos.allocated?pos.allocated.toFixed(2):'-'}</td>
-        <td>${mark.toFixed(2)}</td>
-        <td class="${floating>=0?'green':'red'}">${floating.toFixed(2)}</td>
-        <td class="green">${pos.locked.toFixed(2)}</td>
-        <td class="${pos.lastAction==='Buy'?'green':pos.lastAction==='Sell'?'red':'gray'}">${pos.lastAction}</td>
-      </tr>`;
-  }
-  $('globalPnL').textContent=`Global PnL: $${global.toFixed(2)}`;
-  $('withdrawablePnL').textContent=`Withdrawable PnL: $${withdraw.toFixed(2)}`;
-
-  const sel=$('pairSelect').value;
-  const sig=getSignal(candlesMap[sel]||[]);
-  $('signals').textContent=`Signals: ${sig}`;
-  $('signals').className=sig==='Buy'?'green':sig==='Sell'?'red':'gray';
-}
-
-// === CHART RENDER ===
 function updateChartForSelected(){
   const sel=$('pairSelect').value;
   const arr=candlesMap[sel];
-  if(!arr || arr.length===0) return;
   candleSeries.setData(arr.map(c=>({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close})));
-  fastMA.setData(calcMA(arr,9).filter(p=>p.value!==null));
-  slowMA.setData(calcMA(arr,21).filter(p=>p.value!==null));
+  const fast=calcMA(arr,9).filter(p=>p.value!==null).map(p=>({time:p.time,value:p.value}));
+  const slow=calcMA(arr,21).filter(p=>p.value!==null).map(p=>({time:p.time,value:p.value}));
+  fastMA.setData(fast); slowMA.setData(slow);
   rsiSeries.setData(calcRSI(arr,14));
+
+  if($('toggleMarkers').checked){
+    const m=(positions[sel].markers||[]).map(mt=>({time:mt.time,position:mt.position,color:mt.color,shape:mt.shape,text:mt.text}));
+    candleSeries.setMarkers(m);
+  } else candleSeries.setMarkers([]);
+
   chart.timeScale().fitContent();
 }
 
-// === REFRESH LOOP ===
-async function refreshData(){
-  for(const pair of pairs) await fetchKlines(pair);
+function tick(){
+  if(!running) return;
+  pairs.forEach(pair=>{
+    const arr=candlesMap[pair];
+    const last=arr[arr.length-1];
+    const nextTime=last.time+60;
+    const volBase=Math.max(Math.abs(last.close)*(Math.random()*0.01+0.003),0.0005);
+    const change=(Math.random()-0.5)*2*volBase;
+    const open=last.close; const close=+(open+change);
+    const high=Math.max(open,close)+Math.abs(Math.random()*volBase*0.6);
+    const low=Math.min(open,close)-Math.abs(Math.random()*volBase*0.6);
+    arr.push({time:nextTime,open:+open,high:+high,low:+low,close:+close});
+    if(arr.length>300) arr.shift();
+  });
   updateChartForSelected();
   populateTable();
-  if(running) setTimeout(refreshData, 60000); // every 60 seconds
+  setTimeout(tick,1000);
 }
 
-// === BUTTONS ===
 $('startBtn').onclick=()=>{
-  running=true;
-  $('status').textContent='status: running (live data)';
-  refreshData();
+  if($('modeSelect').value==='live'){
+    $('status').textContent='status: running (live preview)';
+  } else $('status').textContent='status: running';
+  running=true; tick();
 };
-$('stopBtn').onclick=()=>{running=false; $('status').textContent='status: stopped';};
-$('pairSelect').onchange=()=>{updateChartForSelected(); populateTable();};
 
-// === MODE WARNING ===
+$('stopBtn').onclick=()=>{
+  running=false; $('status').textContent='status: stopped';
+};
+
+$('pairSelect').onchange=()=>{ updateChartForSelected(); populateTable(); };
+
 function updateLiveWarning(){
   const mode=$('modeSelect').value;
   const banner=$('live-warning');
@@ -291,13 +299,9 @@ function updateLiveWarning(){
 document.getElementById("modeSelect").addEventListener("change", updateLiveWarning);
 updateLiveWarning();
 
-// === INITIAL LOAD ===
-(async ()=>{ 
-  for(const pair of pairs) await fetchKlines(pair);
-  updateChartForSelected(); 
-  populateTable(); 
-})();
-</script>
+updateChartForSelected();
+populateTable();
 
+</script>
 </body>
 </html>
